@@ -4,7 +4,10 @@ import static android.content.Context.MODE_PRIVATE;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 import android.webkit.CookieManager;
+import android.widget.Toast;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -19,16 +22,26 @@ public class AuthenticationService {
     private static Context mContext;
     private static String userId = null;
 
+    public interface AuthCallback {
+        void onAuthChecked(boolean isAuthenticated, boolean connectionError);
+    }
+
     public static void initialize(Context c, CookieManager cm) {
         mContext = c;
         String sessionCookies = cm.getCookie(API_URL);
 
-        if (sessionCookies != null && sessionCookies.contains("app.sid")) {
-            checkAuthStatusInBackground(sessionCookies);
-        } else {
-            String groupId = getGroupId();
-            if (groupId != null) MyFirebaseMessagingService.unsubscribeFromTopics(groupId);
-        }
+        checkAuthStatusInBackground(sessionCookies, new AuthCallback() {
+            @Override
+            public void onAuthChecked(boolean isAuthenticated, boolean connectionError) {
+                if (!isAuthenticated && !connectionError) {
+                    String groupId = getGroupId();
+                    if (groupId != null) {
+                        MyFirebaseMessagingService.unsubscribeFromTopics(groupId);
+                        saveGroupId(null);
+                    }
+                }
+            }
+        });
     }
 
     public static String getUserId() {
@@ -47,10 +60,12 @@ public class AuthenticationService {
         editor.apply();
     }
 
-    private static void checkAuthStatusInBackground(final String sessionCookies) {
+    private static void checkAuthStatusInBackground(final String sessionCookies, final AuthCallback callback) {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                boolean isAuthenticated = false;
+                boolean connectionError = false;
                 try {
                     URL url = new URL(API_URL + "/auth/status");
                     HttpsURLConnection urlConnection = (HttpsURLConnection) url.openConnection();
@@ -68,28 +83,35 @@ public class AuthenticationService {
                         }
                         reader.close();
 
-                        handleAuthStatusResponse(response.toString());
-                    } else {
-                        String groupId = getGroupId();
-                        if (groupId != null) MyFirebaseMessagingService.unsubscribeFromTopics(groupId);
+                        isAuthenticated = checkAuthStatusResponse(response.toString());
                     }
+                } catch (java.net.UnknownHostException e) {
+                    new Handler(Looper.getMainLooper()).post(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(mContext, "Problemi con la connessione Internet.", Toast.LENGTH_LONG).show();
+                        }
+                    });
+                    connectionError = true;
                 } catch (Exception e) {
-                    String groupId = getGroupId();
-                    if (groupId != null) MyFirebaseMessagingService.unsubscribeFromTopics(groupId);
+                    isAuthenticated = false;
+                } finally {
+                    callback.onAuthChecked(isAuthenticated, connectionError);
                 }
             }
         }).start();
     }
 
-    private static void handleAuthStatusResponse(String response) throws Exception {
+    private static boolean checkAuthStatusResponse(String response) throws Exception {
        JSONObject jsonResponse = new JSONObject(response);
        JSONObject status = jsonResponse.getJSONObject("status");
        JSONObject data = jsonResponse.getJSONObject("data");
 
        if (status.getInt("code") == 20000) {
             userId = data.getString("id");
+            return true;
        } else {
-            throw new Exception("User is not authenticated.");
+            return false;
        }
     }
 }
