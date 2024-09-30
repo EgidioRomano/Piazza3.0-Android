@@ -106,9 +106,10 @@ public class AuthenticationService {
        JSONObject jsonResponse = new JSONObject(response);
        JSONObject status = jsonResponse.getJSONObject("status");
        JSONObject data = jsonResponse.getJSONObject("data");
+       String id = data.getString("id");
 
-       if (status.getInt("code") == 20000) {
-            userId = data.getString("id");
+       if (status.getInt("code") == 20000 && !id.isEmpty()) {
+            userId = id;
             return true;
        } else {
             return false;
